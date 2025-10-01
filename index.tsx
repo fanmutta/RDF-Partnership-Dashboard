@@ -195,7 +195,7 @@ const parsePartnershipCSV = (csv: string): PartnershipInfo[] => {
         headers.forEach((header, i) => {
             entry[header] = values[i] ? values[i].replace(/"/g, '').trim() : '';
         });
-        return entry as PartnershipInfo;
+        return entry;
     });
 };
 
@@ -381,7 +381,7 @@ const AIAdvisorPage: React.FC<{ setView: (view: string) => void }> = ({ setView 
     const [isLoading, setIsLoading] = useState(false);
     const chatContainerRef = useRef<HTMLDivElement>(null);
 
-    const ai = useMemo(() => new GoogleGenAI({ apiKey: process.env.API_KEY as string }), []);
+    const ai = useMemo(() => new GoogleGenAI({ apiKey: process.env.API_KEY }), []);
 
     const systemInstruction = `You are a helpful and expert data analyst for PT Solusi Bangun Indonesia Tbk. Your task is to answer questions about the provided RDF (Refuse-Derived Fuel) partnership data. The data is a JSON object containing a list of all partners with their performance, location, risk scores, and contact details. Analyze the data to answer the user's questions. Be concise and clear in your answers. Format your answers in simple markdown (e.g., use lists, bold text). Always answer in Bahasa Indonesia. Today's date is July 31, 2025. Data context: ${JSON.stringify(combinedFullData)}`;
 
@@ -402,15 +402,11 @@ const AIAdvisorPage: React.FC<{ setView: (view: string) => void }> = ({ setView 
         const query = messageText || userInput;
         if (!query.trim() || isLoading) return;
 
-        // FIX: Using 'as const' to ensure the 'sender' property is inferred as a literal type ('user' | 'ai')
-        // instead of a generic 'string', which resolves the type error with `setMessages`.
-        const newMessages = [...messages, { sender: 'user' as const, text: query }];
-        setMessages(newMessages);
+        setMessages(prev => [...prev, { sender: 'user', text: query }]);
         setUserInput('');
         setIsLoading(true);
 
         try {
-            // FIX: Per @google/genai guidelines, `contents` should be a simple string when `systemInstruction` is used.
             const response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
                 contents: query,
@@ -418,12 +414,12 @@ const AIAdvisorPage: React.FC<{ setView: (view: string) => void }> = ({ setView 
             });
 
             const aiResponse = response.text;
-            setMessages([...newMessages, { sender: 'ai' as const, text: aiResponse }]);
+            setMessages(prev => [...prev, { sender: 'ai', text: aiResponse }]);
 
         } catch (error) {
             console.error("Error calling Gemini API:", error);
             const errorMessage = "Maaf, terjadi kesalahan saat memproses permintaan Anda. Silakan coba lagi.";
-            setMessages([...newMessages, { sender: 'ai' as const, text: errorMessage }]);
+            setMessages(prev => [...prev, { sender: 'ai', text: errorMessage }]);
         } finally {
             setIsLoading(false);
         }
@@ -532,11 +528,12 @@ const CostBenefitAnalysisPage: React.FC<{ setView: (view: string) => void; data:
         let sortableItems = [...calculatedData];
         if (sortConfig !== null) {
             sortableItems.sort((a, b) => {
-                const key = sortConfig.key as keyof CalculatedData;
-                 if (a[key] < b[key]) {
+                const aVal = (a as any)[sortConfig.key];
+                const bVal = (b as any)[sortConfig.key];
+                if (aVal < bVal) {
                     return sortConfig.direction === 'ascending' ? -1 : 1;
                 }
-                if (a[key] > b[key]) {
+                if (aVal > bVal) {
                     return sortConfig.direction === 'ascending' ? 1 : -1;
                 }
                 return 0;
@@ -907,6 +904,218 @@ const EnvironmentalImpactPage: React.FC<{ setView: (view: string) => void; data:
     );
 };
 
+const AlertsComponent: React.FC<{ data: DashboardItem[]; setView: (view: string) => void }> = ({ data, setView }) => {
+    const highRiskPartners = data.filter(p => p.operational_risk_score + p.quality_risk_score >= 8 && p.status === 'Beroperasi');
+    const expiringSoon = data.filter(item => {
+        if (item.contract_expiry_date === 'N/A') return false;
+        const expiryDate = new Date(item.contract_expiry_date);
+        const sixMonthsFromNow = new Date();
+        sixMonthsFromNow.setMonth(sixMonthsFromNow.getMonth() + 6);
+        return expiryDate < sixMonthsFromNow;
+    });
+
+    const alerts = [];
+    if (expiringSoon.length > 0) {
+        alerts.push({
+            type: 'warning',
+            message: `${expiringSoon.length} partnership contracts will expire within 6 months.`,
+            details: expiringSoon.map(p => p.pemda).join(', '),
+            action: () => setView('risk')
+        });
+    }
+    if (highRiskPartners.length > 0) {
+        alerts.push({
+            type: 'danger',
+            message: `${highRiskPartners.length} operating partners have a high combined risk score (>=8).`,
+            details: highRiskPartners.map(p => p.pemda).join(', '),
+            action: () => setView('risk')
+        });
+    }
+    
+    if (alerts.length === 0) return null;
+
+    return (
+        <div className="bg-white p-6 rounded-xl shadow-md mb-8">
+            <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-2 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                Alert Center
+            </h2>
+            <div className="space-y-3">
+                {alerts.map((alert, idx) => (
+                    <div key={idx} className={`p-4 rounded-lg border-l-4 ${alert.type === 'warning' ? 'bg-yellow-50 border-yellow-400' : 'bg-red-50 border-red-400'}`}>
+                        <p className={`font-semibold ${alert.type === 'warning' ? 'text-yellow-800' : 'text-red-800'}`}>{alert.message}</p>
+                        <p className="text-sm text-gray-600">Affected partners: {alert.details}.</p>
+                        <button onClick={alert.action} className="text-sm font-bold text-blue-600 hover:underline mt-1">View Details</button>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+interface DashboardContentProps {
+    handleRefresh: () => void;
+    isRefreshing: boolean;
+    statusFilter: string;
+    setStatusFilter: (value: string) => void;
+    plantFilter: string;
+    setPlantFilter: (value: string) => void;
+    lokasiFilter: string;
+    setLokasiFilter: (value: string) => void;
+    tahunFilter: string;
+    setTahunFilter: (value: string) => void;
+    setCurrentPage: (updater: (page: number) => number) => void;
+    uniqueStatus: string[];
+    uniquePlants: string[];
+    uniqueLokasi: string[];
+    uniqueTahunOperasi: string[];
+    dashboardData: DashboardItem[];
+    totalRdf2024: number;
+    totalRdf2025: number;
+    setView: (view: string) => void;
+    monthlyChartPlant: string;
+    setMonthlyChartPlant: (value: string) => void;
+    paginatedData: DashboardItem[];
+    currentPage: number;
+    totalPages: number;
+}
+
+const DashboardContent: React.FC<DashboardContentProps> = ({
+    handleRefresh, isRefreshing,
+    statusFilter, setStatusFilter,
+    plantFilter, setPlantFilter,
+    lokasiFilter, setLokasiFilter,
+    tahunFilter, setTahunFilter,
+    setCurrentPage, uniqueStatus, uniquePlants,
+    uniqueLokasi, uniqueTahunOperasi, dashboardData,
+    totalRdf2024, totalRdf2025, setView,
+    monthlyChartPlant, setMonthlyChartPlant,
+    paginatedData, currentPage, totalPages
+}) => (
+    <>
+        <header className="mb-8">
+            <div className="flex justify-between items-start">
+                <div>
+                    <h1 className="text-3xl md:text-4xl font-bold text-gray-800">RDF Partnership Dashboard</h1>
+                    <p className="text-gray-500 mt-1">Data Visualization for PT Solusi Bangun Indonesia Tbk</p>
+                </div>
+            </div>
+        </header>
+
+        <AlertsComponent data={dashboardData} setView={setView} />
+
+        <div className="bg-white p-6 rounded-xl shadow-md mb-8">
+            <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-gray-800">Dashboard Filters</h2>
+                <button
+                    onClick={handleRefresh}
+                    disabled={isRefreshing}
+                    className="flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                    {isRefreshing ? (
+                        <>
+                            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-gray-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span>Refreshing...</span>
+                        </>
+                    ) : (
+                        <>
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0011.664 0l3.181-3.183m-4.991-2.695v-4.992m0 0h-4.992m4.992 0l-3.181-3.183a8.25 8.25 0 00-11.664 0L2.985 16.644" />
+                            </svg>
+                            <span>Refresh Data</span>
+                        </>
+                    )}
+                </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div><label htmlFor="status-filter" className="text-sm font-medium text-gray-700">Status</label><select id="status-filter" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(() => 1); }} className="w-full mt-1 p-2 border border-gray-300 rounded-md shadow-sm">{uniqueStatus.map(s => <option key={s} value={s}>{s === 'All' ? 'All Statuses' : s}</option>)}</select></div>
+                <div><label htmlFor="plant-filter" className="text-sm font-medium text-gray-700">SBI Plant</label><select id="plant-filter" value={plantFilter} onChange={(e) => { setPlantFilter(e.target.value); setCurrentPage(() => 1); }} className="w-full mt-1 p-2 border border-gray-300 rounded-md shadow-sm">{uniquePlants.map(p => <option key={p} value={p}>{p === 'All' ? 'All Plants' : p}</option>)}</select></div>
+                <div><label htmlFor="lokasi-filter" className="text-sm font-medium text-gray-700">RDF Location</label><select id="lokasi-filter" value={lokasiFilter} onChange={(e) => { setLokasiFilter(e.target.value); setCurrentPage(() => 1); }} className="w-full mt-1 p-2 border border-gray-300 rounded-md shadow-sm">{uniqueLokasi.map(l => <option key={l} value={l}>{l === 'All' ? 'All Locations' : l}</option>)}</select></div>
+                <div><label htmlFor="tahun-filter" className="text-sm font-medium text-gray-700">Year of Operation</label><select id="tahun-filter" value={tahunFilter} onChange={(e) => { setTahunFilter(e.target.value); setCurrentPage(() => 1); }} className="w-full mt-1 p-2 border border-gray-300 rounded-md shadow-sm">{uniqueTahunOperasi.map(y => <option key={y} value={y}>{y === 'All' ? 'All Years' : y}</option>)}</select></div>
+            </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div className="kpi-card p-6 flex items-center"><div className="bg-blue-100 text-blue-600 p-4 rounded-full mr-4"><svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg></div><div><p className="text-gray-500 text-sm">Total Partners</p><p className="text-2xl font-bold text-gray-800">{dashboardData.length}</p></div></div>
+            <div className="kpi-card p-6 flex items-center"><div className="bg-green-100 text-green-600 p-4 rounded-full mr-4"><svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7.014A8.003 8.003 0 0122 12c0 3-1 7-6.343 6.657z" /></svg></div><div><p className="text-gray-500 text-sm">Total RDF Received 2024 (Tons)</p><p className="text-2xl font-bold text-gray-800">{totalRdf2024.toLocaleString('id-ID', { maximumFractionDigits: 2 })}</p></div></div>
+            <div className="kpi-card p-6 flex items-center"><div className="bg-yellow-100 text-yellow-600 p-4 rounded-full mr-4"><svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg></div><div><p className="text-gray-500 text-sm">Total RDF 2025 (YTD July)</p><p className="text-2xl font-bold text-gray-800">{totalRdf2025.toLocaleString('id-ID', { maximumFractionDigits: 2 })}</p></div></div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+            <div className="bg-white p-6 rounded-xl shadow-md"><h2 className="text-xl font-bold text-gray-800 mb-4">Top 10 RDF Contributors 2024</h2><canvas id="chart2024"></canvas></div>
+            <div className="bg-white p-6 rounded-xl shadow-md"><h2 className="text-xl font-bold text-gray-800 mb-4">Top 10 RDF Contributors 2025 (YTD)</h2><canvas id="chart2025"></canvas></div>
+        </div>
+
+        <div className="bg-white p-6 rounded-xl shadow-md mb-8"><h2 className="text-xl font-bold text-gray-800 mb-4">Map of RDF Plant Locations & SBI Plants</h2><div id="map"></div></div>
+        
+        <div className="mb-8">
+            <h2 className="text-2xl font-bold text-gray-800 mb-4 text-center">Additional Insights & Operational Performance</h2>
+             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                 <div className="bg-white p-6 rounded-xl shadow-md"><h3 className="text-xl font-bold text-gray-800 mb-4">Partnership Status</h3><canvas id="status-chart"></canvas></div>
+                 <div className="bg-white p-6 rounded-xl shadow-md lg:col-span-2">
+                    <div className="flex justify-between items-center mb-4">
+                         <h3 className="text-xl font-bold text-gray-800">Monthly RDF Intake vs. Budget (2025)</h3>
+                         <select value={monthlyChartPlant} onChange={(e) => setMonthlyChartPlant(e.target.value)} className="p-2 border border-gray-300 rounded-md shadow-sm">
+                             <option value="All">All Plants</option>
+                             <option value="Cilacap">Cilacap</option>
+                             <option value="Narogong">Narogong</option>
+                             <option value="Tuban">Tuban</option>
+                             <option value="Lho">Lhoknga</option>
+                         </select>
+                    </div>
+                    <canvas id="monthly-intake-chart"></canvas>
+                    {monthlyChartPlant === 'Cilacap' && <div dangerouslySetInnerHTML={{ __html: operationalRemarks }} className="mt-4 text-sm text-gray-600 p-4 bg-gray-50 rounded-lg"></div>}
+                </div>
+
+                {/* --- KARTU BARU/DIPERBARUI --- */}
+                <div className="bg-white p-6 rounded-xl shadow-md flex flex-col justify-between text-center"><h3 className="text-xl font-bold text-gray-800">Tanya AI (Ask AI)</h3><p className="text-gray-600 my-2">Ask natural language questions about your partnership data.</p><button onClick={() => setView('ai_advisor')} className="mt-auto bg-indigo-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-indigo-600">Ask the AI Advisor</button></div>
+                <div className="bg-white p-6 rounded-xl shadow-md flex flex-col justify-between text-center"><h3 className="text-xl font-bold text-gray-800">RDF Quality Analysis</h3><p className="text-gray-600 my-2">Compare caloric values (GCV) and moisture content from various sources.</p><button onClick={() => setView('quality')} className="mt-auto bg-teal-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-teal-600">View Quality Analysis</button></div>
+                <div className="bg-white p-6 rounded-xl shadow-md flex flex-col justify-between text-center"><h3 className="text-xl font-bold text-gray-800">Risk Assessment</h3><p className="text-gray-600 my-2">Visualize operational, quality, and contract risks from partners.</p><button onClick={() => setView('risk')} className="mt-auto bg-red-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-red-600">View Risk Dashboard</button></div>
+                <div className="bg-white p-6 rounded-xl shadow-md flex flex-col justify-between text-center"><h3 className="text-xl font-bold text-gray-800">Cost-Benefit Analysis</h3><p className="text-gray-600 my-2">Calculate the profitability of each partner based on costs and savings.</p><button onClick={() => setView('cost')} className="mt-auto bg-blue-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-blue-600">View Cost Analysis</button></div>
+                <div className="bg-white p-6 rounded-xl shadow-md flex flex-col justify-between text-center"><h3 className="text-xl font-bold text-gray-800">Supply Forecast</h3><p className="text-gray-600 my-2">Predict RDF supply trends for proactive planning.</p><button onClick={() => setView('forecast')} className="mt-auto bg-orange-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-orange-600">View Forecast</button></div>
+                <div className="bg-white p-6 rounded-xl shadow-md flex flex-col justify-between text-center"><h3 className="text-xl font-bold text-gray-800">Dampak Lingkungan</h3><p className="text-gray-600 my-2">Analisis pengurangan CO₂ dan penyerapan sampah TPA dari program RDF.</p><button onClick={() => setView('environmental')} className="mt-auto bg-cyan-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-cyan-600">Lihat Analisis Dampak</button></div>
+             </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-xl shadow-md">
+            <h2 className="text-xl font-bold text-gray-800 mb-4">Partnership Data Details</h2>
+            <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left text-gray-500">
+                    <thead className="text-xs text-gray-700 uppercase bg-gray-50"><tr><th scope="col" className="px-6 py-3">Partner</th><th scope="col" className="px-6 py-3">RDF Plant Location</th><th scope="col" className="px-6 py-3">SBI Plant</th><th scope="col" className="px-6 py-3 text-center">Distance (KM)</th><th scope="col" className="px-6 py-3 text-center">Status</th><th scope="col" className="px-6 py-3 text-center">Year of Operation</th><th scope="col" className="px-6 py-3 text-right">RDF 2024 (Tons)</th><th scope="col" className="px-6 py-3 text-right">RDF 2025 (YTD)</th></tr></thead>
+                    <tbody>
+                        {paginatedData.map((item, index) => {
+                            const statusColors: {[key: string]: string} = { 'Beroperasi': 'text-green-600 bg-green-100', 'Rencana': 'text-orange-600 bg-orange-100', 'Prospek': 'text-yellow-600 bg-yellow-100' };
+                            const statusClass = statusColors[item.status] || 'text-gray-600 bg-gray-100';
+                            return (
+                                <tr key={index} className="bg-white border-b hover:bg-gray-50">
+                                    <th scope="row" className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">{item.pemda}</th>
+                                    <td className="px-6 py-4">{item.lokasi_rdf}</td>
+                                    <td className="px-6 py-4">{item.closestFactory ? item.closestFactory.name : 'N/A'}</td>
+                                    <td className="px-6 py-4 text-center">{item.distance ? `~${item.distance.toFixed(1)}` : 'N/A'}</td>
+                                    <td className="px-6 py-4 text-center"><span className={`px-2 py-1 font-semibold text-xs rounded-full ${statusClass}`}>{item.status}</span></td>
+                                    <td className="px-6 py-4 text-center">{item.tahun_operasi}</td>
+                                    <td className="px-6 py-4 text-right">{item.rdf_2024.toLocaleString('id-ID')}</td>
+                                    <td className="px-6 py-4 text-right">{item.rdf_2025.toLocaleString('id-ID')}</td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+                 {paginatedData.length === 0 && (<div className="text-center py-8 text-gray-500"><p>No data matches the selected filters.</p></div>)}
+            </div>
+            <div className="flex justify-between items-center pt-4">
+                <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg hover:bg-gray-400 disabled:opacity-50">Previous</button>
+                <span className="text-sm text-gray-600">Page {currentPage} of {totalPages}</span>
+                <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg hover:bg-gray-400 disabled:opacity-50">Next</button>
+            </div>
+        </div>
+    </>
+);
+
+
 // --- KOMPONEN APLIKASI UTAMA ---
 const App: React.FC = () => {
     const [view, setView] = useState('dashboard');
@@ -916,12 +1125,20 @@ const App: React.FC = () => {
     const [plantFilter, setPlantFilter] = useState('All');
     const [lokasiFilter, setLokasiFilter] = useState('All');
     const [monthlyChartPlant, setMonthlyChartPlant] = useState('Cilacap');
+    const [isRefreshing, setIsRefreshing] = useState(false);
     
     const mapRef = useRef<L.Map | null>(null);
     const tileLayerRef = useRef<L.TileLayer | null>(null);
     const markersRef = useRef<{ [id: number]: L.Marker }>({});
     const chartsRef = useRef<{[key: string]: Chart | null}>({});
     const routingControlRef = useRef<L.Routing.Control | null>(null);
+
+    const handleRefresh = useCallback(() => {
+        setIsRefreshing(true);
+        setTimeout(() => {
+            setIsRefreshing(false);
+        }, 750); // Simulate network delay
+    }, []);
 
     useEffect(() => {
         const root = document.documentElement;
@@ -1041,8 +1258,10 @@ const App: React.FC = () => {
         }
 
         const createTopContributorChart = (canvasId: string, year: number, colors: typeof chartColors['light']) => {
-            const sortedData = [...dashboardData].filter(d => (d[`rdf_${year}` as keyof DashboardItem] as number) > 0)
-                .sort((a, b) => (b[`rdf_${year}` as keyof DashboardItem] as number) - (a[`rdf_${year}` as keyof DashboardItem] as number))
+            const propName = `rdf_${year}`;
+            const sortedData = [...dashboardData]
+                .filter(d => (d as any)[propName] > 0)
+                .sort((a, b) => (b as any)[propName] - (a as any)[propName])
                 .slice(0, 10);
             
             createChart(canvasId, {
@@ -1051,7 +1270,7 @@ const App: React.FC = () => {
                     labels: sortedData.map(d => d.pemda),
                     datasets: [{
                         label: `RDF Amount (Tons)`,
-                        data: sortedData.map(d => d[`rdf_${year}` as keyof DashboardItem] as number),
+                        data: sortedData.map(d => (d as any)[propName]),
                         backgroundColor: year === 2024 ? 'rgba(54, 162, 235, 0.6)' : 'rgba(255, 206, 86, 0.6)',
                         borderColor: year === 2024 ? 'rgba(54, 162, 235, 1)' : 'rgba(255, 206, 86, 1)',
                         borderWidth: 1
@@ -1132,17 +1351,20 @@ const App: React.FC = () => {
 
         const visibleIds = new Set(filteredData.map(item => item.id));
 
-        Object.entries(markersRef.current).forEach(([id, marker]) => {
+        // FIX: Replaced Object.entries with Object.keys to fix an issue where the 'marker'
+        // type was being inferred as 'unknown', causing type errors on '.addTo' and '.removeFrom'.
+        // This new approach ensures 'marker' is correctly typed as L.Marker by accessing it via a numeric key.
+        Object.keys(markersRef.current).forEach(id => {
             const numericId = parseInt(id, 10);
-            const leafletMarker = marker as L.Marker;
+            const marker = markersRef.current[numericId];
             
             if (visibleIds.has(numericId)) {
-                if (!mapRef.current?.hasLayer(leafletMarker)) {
-                    leafletMarker.addTo(mapRef.current!);
+                if (!mapRef.current?.hasLayer(marker)) {
+                    marker.addTo(mapRef.current!);
                 }
             } else {
-                if (mapRef.current?.hasLayer(leafletMarker)) {
-                    leafletMarker.removeFrom(mapRef.current!);
+                if (mapRef.current?.hasLayer(marker)) {
+                    marker.removeFrom(mapRef.current!);
                 }
             }
         });
@@ -1159,165 +1381,66 @@ const App: React.FC = () => {
     const totalRdf2024 = dashboardData.reduce((sum, item) => sum + item.rdf_2024, 0);
     const totalRdf2025 = dashboardData.reduce((sum, item) => sum + item.rdf_2025, 0);
 
-    const AlertsComponent = () => {
-        const highRiskPartners = dashboardData.filter(p => p.operational_risk_score + p.quality_risk_score >= 8 && p.status === 'Beroperasi');
-        const expiringSoon = dashboardData.filter(item => {
-            if (item.contract_expiry_date === 'N/A') return false;
-            const expiryDate = new Date(item.contract_expiry_date);
-            const sixMonthsFromNow = new Date();
-            sixMonthsFromNow.setMonth(sixMonthsFromNow.getMonth() + 6);
-            return expiryDate < sixMonthsFromNow;
-        });
-
-        const alerts = [];
-        if (expiringSoon.length > 0) {
-            alerts.push({
-                type: 'warning',
-                message: `${expiringSoon.length} partnership contracts will expire within 6 months.`,
-                details: expiringSoon.map(p => p.pemda).join(', '),
-                action: () => setView('risk')
-            });
-        }
-        if (highRiskPartners.length > 0) {
-            alerts.push({
-                type: 'danger',
-                message: `${highRiskPartners.length} operating partners have a high combined risk score (>=8).`,
-                details: highRiskPartners.map(p => p.pemda).join(', '),
-                action: () => setView('risk')
-            });
-        }
-        
-        if (alerts.length === 0) return null;
-
-        return (
-            <div className="bg-white p-6 rounded-xl shadow-md mb-8">
-                <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-2 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                    Alert Center
-                </h2>
-                <div className="space-y-3">
-                    {alerts.map((alert, idx) => (
-                        <div key={idx} className={`p-4 rounded-lg border-l-4 ${alert.type === 'warning' ? 'bg-yellow-50 border-yellow-400' : 'bg-red-50 border-red-400'}`}>
-                            <p className={`font-semibold ${alert.type === 'warning' ? 'text-yellow-800' : 'text-red-800'}`}>{alert.message}</p>
-                            <p className="text-sm text-gray-600">Affected partners: {alert.details}.</p>
-                            <button onClick={alert.action} className="text-sm font-bold text-blue-600 hover:underline mt-1">View Details</button>
-                        </div>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    const DashboardContent = () => (
-        <>
-            <header className="mb-8">
-                <div className="flex justify-between items-start">
-                    <div>
-                        <h1 className="text-3xl md:text-4xl font-bold text-gray-800">RDF Partnership Dashboard</h1>
-                        <p className="text-gray-500 mt-1">Data Visualization for PT Solusi Bangun Indonesia Tbk</p>
-                    </div>
-                </div>
-            </header>
-
-            <AlertsComponent />
-
-            <div className="bg-white p-6 rounded-xl shadow-md mb-8">
-                <h2 className="text-xl font-bold text-gray-800 mb-4">Dashboard Filters</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                    <div><label htmlFor="status-filter" className="text-sm font-medium text-gray-700">Status</label><select id="status-filter" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }} className="w-full mt-1 p-2 border border-gray-300 rounded-md shadow-sm">{uniqueStatus.map(s => <option key={s} value={s}>{s === 'All' ? 'All Statuses' : s}</option>)}</select></div>
-                    <div><label htmlFor="plant-filter" className="text-sm font-medium text-gray-700">SBI Plant</label><select id="plant-filter" value={plantFilter} onChange={(e) => { setPlantFilter(e.target.value); setCurrentPage(1); }} className="w-full mt-1 p-2 border border-gray-300 rounded-md shadow-sm">{uniquePlants.map(p => <option key={p} value={p}>{p === 'All' ? 'All Plants' : p}</option>)}</select></div>
-                    <div><label htmlFor="lokasi-filter" className="text-sm font-medium text-gray-700">RDF Location</label><select id="lokasi-filter" value={lokasiFilter} onChange={(e) => { setLokasiFilter(e.target.value); setCurrentPage(1); }} className="w-full mt-1 p-2 border border-gray-300 rounded-md shadow-sm">{uniqueLokasi.map(l => <option key={l} value={l}>{l === 'All' ? 'All Locations' : l}</option>)}</select></div>
-                    <div><label htmlFor="tahun-filter" className="text-sm font-medium text-gray-700">Year of Operation</label><select id="tahun-filter" value={tahunFilter} onChange={(e) => { setTahunFilter(e.target.value); setCurrentPage(1); }} className="w-full mt-1 p-2 border border-gray-300 rounded-md shadow-sm">{uniqueTahunOperasi.map(y => <option key={y} value={y}>{y === 'All' ? 'All Years' : y}</option>)}</select></div>
-                </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                <div className="kpi-card p-6 flex items-center"><div className="bg-blue-100 text-blue-600 p-4 rounded-full mr-4"><svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg></div><div><p className="text-gray-500 text-sm">Total Partners</p><p className="text-2xl font-bold text-gray-800">{dashboardData.length}</p></div></div>
-                <div className="kpi-card p-6 flex items-center"><div className="bg-green-100 text-green-600 p-4 rounded-full mr-4"><svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7.014A8.003 8.003 0 0122 12c0 3-1 7-6.343 6.657z" /></svg></div><div><p className="text-gray-500 text-sm">Total RDF Received 2024 (Tons)</p><p className="text-2xl font-bold text-gray-800">{totalRdf2024.toLocaleString('id-ID', { maximumFractionDigits: 2 })}</p></div></div>
-                <div className="kpi-card p-6 flex items-center"><div className="bg-yellow-100 text-yellow-600 p-4 rounded-full mr-4"><svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg></div><div><p className="text-gray-500 text-sm">Total RDF 2025 (YTD July)</p><p className="text-2xl font-bold text-gray-800">{totalRdf2025.toLocaleString('id-ID', { maximumFractionDigits: 2 })}</p></div></div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-                <div className="bg-white p-6 rounded-xl shadow-md"><h2 className="text-xl font-bold text-gray-800 mb-4">Top 10 RDF Contributors 2024</h2><canvas id="chart2024"></canvas></div>
-                <div className="bg-white p-6 rounded-xl shadow-md"><h2 className="text-xl font-bold text-gray-800 mb-4">Top 10 RDF Contributors 2025 (YTD)</h2><canvas id="chart2025"></canvas></div>
-            </div>
-
-            <div className="bg-white p-6 rounded-xl shadow-md mb-8"><h2 className="text-xl font-bold text-gray-800 mb-4">Map of RDF Plant Locations & SBI Plants</h2><div id="map"></div></div>
-            
-            <div className="mb-8">
-                <h2 className="text-2xl font-bold text-gray-800 mb-4 text-center">Additional Insights & Operational Performance</h2>
-                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                     <div className="bg-white p-6 rounded-xl shadow-md"><h3 className="text-xl font-bold text-gray-800 mb-4">Partnership Status</h3><canvas id="status-chart"></canvas></div>
-                     <div className="bg-white p-6 rounded-xl shadow-md lg:col-span-2">
-                        <div className="flex justify-between items-center mb-4">
-                             <h3 className="text-xl font-bold text-gray-800">Monthly RDF Intake vs. Budget (2025)</h3>
-                             <select value={monthlyChartPlant} onChange={(e) => setMonthlyChartPlant(e.target.value)} className="p-2 border border-gray-300 rounded-md shadow-sm">
-                                 <option value="All">All Plants</option>
-                                 <option value="Cilacap">Cilacap</option>
-                                 <option value="Narogong">Narogong</option>
-                                 <option value="Tuban">Tuban</option>
-                                 <option value="Lho">Lhoknga</option>
-                             </select>
-                        </div>
-                        <canvas id="monthly-intake-chart"></canvas>
-                        {monthlyChartPlant === 'Cilacap' && <div dangerouslySetInnerHTML={{ __html: operationalRemarks }} className="mt-4 text-sm text-gray-600 p-4 bg-gray-50 rounded-lg"></div>}
-                    </div>
-
-                    {/* --- KARTU BARU/DIPERBARUI --- */}
-                    <div className="bg-white p-6 rounded-xl shadow-md flex flex-col justify-between text-center"><h3 className="text-xl font-bold text-gray-800">Tanya AI (Ask AI)</h3><p className="text-gray-600 my-2">Ask natural language questions about your partnership data.</p><button onClick={() => setView('ai_advisor')} className="mt-auto bg-indigo-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-indigo-600">Ask the AI Advisor</button></div>
-                    <div className="bg-white p-6 rounded-xl shadow-md flex flex-col justify-between text-center"><h3 className="text-xl font-bold text-gray-800">RDF Quality Analysis</h3><p className="text-gray-600 my-2">Compare caloric values (GCV) and moisture content from various sources.</p><button onClick={() => setView('quality')} className="mt-auto bg-teal-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-teal-600">View Quality Analysis</button></div>
-                    <div className="bg-white p-6 rounded-xl shadow-md flex flex-col justify-between text-center"><h3 className="text-xl font-bold text-gray-800">Risk Assessment</h3><p className="text-gray-600 my-2">Visualize operational, quality, and contract risks from partners.</p><button onClick={() => setView('risk')} className="mt-auto bg-red-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-red-600">View Risk Dashboard</button></div>
-                    <div className="bg-white p-6 rounded-xl shadow-md flex flex-col justify-between text-center"><h3 className="text-xl font-bold text-gray-800">Cost-Benefit Analysis</h3><p className="text-gray-600 my-2">Calculate the profitability of each partner based on costs and savings.</p><button onClick={() => setView('cost')} className="mt-auto bg-blue-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-blue-600">View Cost Analysis</button></div>
-                    <div className="bg-white p-6 rounded-xl shadow-md flex flex-col justify-between text-center"><h3 className="text-xl font-bold text-gray-800">Supply Forecast</h3><p className="text-gray-600 my-2">Predict RDF supply trends for proactive planning.</p><button onClick={() => setView('forecast')} className="mt-auto bg-orange-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-orange-600">View Forecast</button></div>
-                    <div className="bg-white p-6 rounded-xl shadow-md flex flex-col justify-between text-center"><h3 className="text-xl font-bold text-gray-800">Dampak Lingkungan</h3><p className="text-gray-600 my-2">Analisis pengurangan CO₂ dan penyerapan sampah TPA dari program RDF.</p><button onClick={() => setView('environmental')} className="mt-auto bg-cyan-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-cyan-600">Lihat Analisis Dampak</button></div>
-                 </div>
-            </div>
-
-            <div className="bg-white p-6 rounded-xl shadow-md">
-                <h2 className="text-xl font-bold text-gray-800 mb-4">Partnership Data Details</h2>
-                <div className="overflow-x-auto">
-                    <table className="w-full text-sm text-left text-gray-500">
-                        <thead className="text-xs text-gray-700 uppercase bg-gray-50"><tr><th scope="col" className="px-6 py-3">Partner</th><th scope="col" className="px-6 py-3">RDF Plant Location</th><th scope="col" className="px-6 py-3">SBI Plant</th><th scope="col" className="px-6 py-3 text-center">Distance (KM)</th><th scope="col" className="px-6 py-3 text-center">Status</th><th scope="col" className="px-6 py-3 text-center">Year of Operation</th><th scope="col" className="px-6 py-3 text-right">RDF 2024 (Tons)</th><th scope="col" className="px-6 py-3 text-right">RDF 2025 (YTD)</th></tr></thead>
-                        <tbody>
-                            {paginatedData.map((item, index) => {
-                                const statusColors: {[key: string]: string} = { 'Beroperasi': 'text-green-600 bg-green-100', 'Rencana': 'text-orange-600 bg-orange-100', 'Prospek': 'text-yellow-600 bg-yellow-100' };
-                                const statusClass = statusColors[item.status] || 'text-gray-600 bg-gray-100';
-                                return (
-                                    <tr key={index} className="bg-white border-b hover:bg-gray-50">
-                                        <th scope="row" className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">{item.pemda}</th>
-                                        <td className="px-6 py-4">{item.lokasi_rdf}</td>
-                                        <td className="px-6 py-4">{item.closestFactory ? item.closestFactory.name : 'N/A'}</td>
-                                        <td className="px-6 py-4 text-center">{item.distance ? `~${item.distance.toFixed(1)}` : 'N/A'}</td>
-                                        <td className="px-6 py-4 text-center"><span className={`px-2 py-1 font-semibold text-xs rounded-full ${statusClass}`}>{item.status}</span></td>
-                                        <td className="px-6 py-4 text-center">{item.tahun_operasi}</td>
-                                        <td className="px-6 py-4 text-right">{item.rdf_2024.toLocaleString('id-ID')}</td>
-                                        <td className="px-6 py-4 text-right">{item.rdf_2025.toLocaleString('id-ID')}</td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                     {paginatedData.length === 0 && (<div className="text-center py-8 text-gray-500"><p>No data matches the selected filters.</p></div>)}
-                </div>
-                <div className="flex justify-between items-center pt-4">
-                    <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg hover:bg-gray-400 disabled:opacity-50">Previous</button>
-                    <span className="text-sm text-gray-600">Page {currentPage} of {totalPages}</span>
-                    <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg hover:bg-gray-400 disabled:opacity-50">Next</button>
-                </div>
-            </div>
-        </>
-    );
-
     const renderContent = () => {
         switch (view) {
-            case 'dashboard': return <DashboardContent />;
+            case 'dashboard': return <DashboardContent 
+                handleRefresh={handleRefresh}
+                isRefreshing={isRefreshing}
+                statusFilter={statusFilter}
+                setStatusFilter={setStatusFilter}
+                plantFilter={plantFilter}
+                setPlantFilter={setPlantFilter}
+                lokasiFilter={lokasiFilter}
+                setLokasiFilter={setLokasiFilter}
+                tahunFilter={tahunFilter}
+                setTahunFilter={setTahunFilter}
+                setCurrentPage={setCurrentPage}
+                uniqueStatus={uniqueStatus}
+                uniquePlants={uniquePlants}
+                uniqueLokasi={uniqueLokasi}
+                uniqueTahunOperasi={uniqueTahunOperasi}
+                dashboardData={dashboardData}
+                totalRdf2024={totalRdf2024}
+                totalRdf2025={totalRdf2025}
+                setView={setView}
+                monthlyChartPlant={monthlyChartPlant}
+                setMonthlyChartPlant={setMonthlyChartPlant}
+                paginatedData={paginatedData}
+                currentPage={currentPage}
+                totalPages={totalPages}
+            />;
             case 'quality': return <QualityAnalysisPage setView={setView} />;
             case 'ai_advisor': return <AIAdvisorPage setView={setView} />;
             case 'cost': return <CostBenefitAnalysisPage setView={setView} data={dashboardData} />;
             case 'forecast': return <ForecastPage setView={setView} />;
             case 'risk': return <RiskAssessmentPage setView={setView} data={dashboardData} />;
             case 'environmental': return <EnvironmentalImpactPage setView={setView} data={dashboardData} />;
-            default: return <DashboardContent />;
+            default: return <DashboardContent 
+                handleRefresh={handleRefresh}
+                isRefreshing={isRefreshing}
+                statusFilter={statusFilter}
+                setStatusFilter={setStatusFilter}
+                plantFilter={plantFilter}
+                setPlantFilter={setPlantFilter}
+                lokasiFilter={lokasiFilter}
+                setLokasiFilter={setLokasiFilter}
+                tahunFilter={tahunFilter}
+                setTahunFilter={setTahunFilter}
+                setCurrentPage={setCurrentPage}
+                uniqueStatus={uniqueStatus}
+                uniquePlants={uniquePlants}
+                uniqueLokasi={uniqueLokasi}
+                uniqueTahunOperasi={uniqueTahunOperasi}
+                dashboardData={dashboardData}
+                totalRdf2024={totalRdf2024}
+                totalRdf2025={totalRdf2025}
+                setView={setView}
+                monthlyChartPlant={monthlyChartPlant}
+                setMonthlyChartPlant={setMonthlyChartPlant}
+                paginatedData={paginatedData}
+                currentPage={currentPage}
+                totalPages={totalPages}
+            />;
         }
     };
 
