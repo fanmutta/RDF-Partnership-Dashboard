@@ -381,7 +381,7 @@ const AIAdvisorPage: React.FC<{ setView: (view: string) => void }> = ({ setView 
     const [isLoading, setIsLoading] = useState(false);
     const chatContainerRef = useRef<HTMLDivElement>(null);
 
-    const ai = useMemo(() => new GoogleGenAI({ apiKey: process.env.API_KEY }), []);
+    const ai = useMemo(() => new GoogleGenAI({ apiKey: import.meta.env.VITE_API_KEY }), []);
 
     const systemInstruction = `You are a helpful and expert data analyst for PT Solusi Bangun Indonesia Tbk. Your task is to answer questions about the provided RDF (Refuse-Derived Fuel) partnership data. The data is a JSON object containing a list of all partners with their performance, location, risk scores, and contact details. Analyze the data to answer the user's questions. Be concise and clear in your answers. Format your answers in simple markdown (e.g., use lists, bold text). Always answer in Bahasa Indonesia. Today's date is July 31, 2025. Data context: ${JSON.stringify(combinedFullData)}`;
 
